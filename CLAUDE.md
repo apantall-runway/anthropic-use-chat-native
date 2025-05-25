@@ -40,7 +40,7 @@ Keep Next.js routes thin - just proxy and auth:
 ### Type Safety
 Use Anthropic SDK types directly:
 ```typescript
-import type { Message, ContentBlock } from '@anthropic-ai/sdk';
+import type { Message, ContentBlock } from '@anthropic-ai/sdk'
 ```
 
 ## Development Process
@@ -157,13 +157,13 @@ Maintain clear documentation of:
 
 ## Next Steps (Revised - API First)
 1. Set up basic Next.js project structure ✓
-2. Install Anthropic SDK and Zustand
-3. Create Zustand store matching Anthropic's API types
-4. Create minimal API route for Anthropic proxy
+2. Install Anthropic SDK and Zustand ✓
+3. Create Zustand store matching Anthropic's API types ✓
+4. Create minimal API route for Anthropic proxy ✓
 5. Build simple useChat hook connected to store
 6. Create testing page that:
-   - Shows raw JSON state from Zustand
-   - Has a simple input to send messages
-   - Displays streaming responses as they come
-7. Test with basic message streaming
+   - Shows raw JSON state from Zustand ✓
+   - Has a simple input to send messages ✓
+   - Displays streaming responses as they come ✓
+7. Test with basic message streaming ✓
 8. THEN implement proper UI/styling system based on actual data

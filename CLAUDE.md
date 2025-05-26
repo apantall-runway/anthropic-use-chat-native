@@ -3,6 +3,232 @@
 ## Project Overview
 Building a lightweight, native implementation of Vercel's useChat hook that directly interfaces with Anthropic's Messages API, providing immediate access to Claude's latest features including web search, code interpreter, and file system tools.
 
+## 🚀 Getting Started for New Developers
+
+Welcome! This guide will help you understand how this project works and get you up to speed quickly.
+
+### What We've Built So Far
+We've created the foundation of an AI chat application that connects directly to Anthropic's Claude API. The current implementation includes:
+
+1. **A Zustand store** (`/store/chat.ts`) - The brain of the application that manages all state
+2. **An API route** (`/app/api/chat/route.ts`) - Handles communication with Anthropic's API
+3. **A test page** (`/app/test/page.tsx`) - Shows the raw data flow and basic UI
+4. **Stream parser** (`/lib/stream-parser.ts`) - Processes streaming responses from the API
+
+### Quick Start
+```bash
+# Install dependencies
+pnpm install
+
+# Set up your environment
+cp .env.example .env.local
+# Add your Anthropic API key to .env.local: ANTHROPIC_API_KEY=your-key-here
+
+# Run the development server
+pnpm dev
+
+# Visit http://localhost:3000/test to see the test interface
+```
+
+### How It All Works Together
+
+#### 1. The Zustand Store (The Heart of Everything)
+The store in `/store/chat.ts` manages ALL application state:
+- **Messages**: Chat history with support for text, thinking blocks, and tool use
+- **Threads**: Conversation containers (though we're using single thread for now)
+- **Streaming State**: Tracks what's currently happening (thinking, searching, etc.)
+- **Tool Calls**: Manages web search results and code execution
+
+Key functions:
+- `submitMessage()`: Sends a message to the API and handles the streaming response
+- `addMessage()`: Adds a new message to the current thread
+- `updateMessage()`: Updates a message as streaming content arrives
+
+#### 2. The API Route (The Bridge)
+The route in `/app/api/chat/route.ts` is a thin proxy that:
+- Receives messages from the client
+- Adds authentication headers
+- Forwards requests to Anthropic
+- Streams responses back using Server-Sent Events (SSE)
+
+Important features:
+- Supports Claude 4 Opus with beta features
+- Enables web search and code execution tools
+- Handles thinking blocks with proper configuration
+
+#### 3. The Test Page (The Validator)
+The page at `/app/test/page.tsx` shows:
+- Raw JSON state from Zustand (left side)
+- Formatted messages with thinking blocks and search results (right side)
+- Input field to send messages
+- Real-time updates as responses stream in
+
+### Understanding the Data Flow
+
+1. **User types a message** → Input stored in component state
+2. **User hits Enter** → `submitMessage()` called in Zustand store
+3. **Store sends POST request** → API route receives the message
+4. **API route calls Anthropic** → With proper headers and tool definitions
+5. **Anthropic streams response** → API route forwards SSE events
+6. **Store processes events** → Updates messages, tool calls, thinking state
+7. **React re-renders** → UI shows latest state automatically
+
+### Key Concepts You Need to Know
+
+#### Server-Sent Events (SSE)
+We use SSE for streaming because it's:
+- Simple to implement
+- Works well with Next.js
+- Allows real-time updates
+- Handles long responses gracefully
+
+#### Anthropic's Content Blocks
+Messages contain different types of content:
+- **Text blocks**: Regular message text
+- **Thinking blocks**: Claude's reasoning process
+- **Tool use blocks**: Calls to web search or code execution
+- **Tool result blocks**: Results from tool executions
+
+#### Zustand State Management
+Why Zustand?
+- No providers needed (unlike Context API)
+- Simple to use: `const messages = useChatStore(state => state.messages)`
+- DevTools support for debugging
+- Persists through hot reloads
+
+### Common Tasks
+
+#### Adding a New Feature to the Store
+```typescript
+// In /store/chat.ts
+export const useChatStore = create<ChatStore>()((set, get) => ({
+  // Add new state
+  myNewFeature: false,
+  
+  // Add action to update it
+  toggleMyFeature: () => set(state => ({ 
+    myNewFeature: !state.myNewFeature 
+  }))
+}))
+```
+
+#### Handling a New Event Type from the API
+```typescript
+// In store's submitMessage function
+case 'message_delta':
+  if (data.delta.type === 'new_event_type') {
+    // Handle your new event
+  }
+  break;
+```
+
+#### Adding UI for New Content Types
+```typescript
+// In your component
+{block.type === 'new_type' && (
+  <div className="special-styling">
+    {/* Render your new content type */}
+  </div>
+)}
+```
+
+### Debugging Tips
+
+1. **Check the Network tab** - Look for the `/api/chat` request and its streaming response
+2. **Watch the JSON state** - The left panel on the test page shows everything
+3. **Console logs in the store** - Add logs in `submitMessage()` to track events
+4. **Check API errors** - They appear in the `streamError` state
+
+### What's Next?
+
+The immediate next steps are:
+1. **Build the useChat hook** - A clean interface for components to use the store
+2. **Add proper UI components** - Using shadcn/ui for consistency
+3. **Implement file uploads** - Support for images and documents
+4. **Add thread management** - Multiple conversations
+5. **Persist conversations** - Local storage or database
+
+### Architecture Principles to Follow
+
+1. **Keep the API route thin** - It should only proxy and authenticate
+2. **All state in Zustand** - Don't create local component state for shared data
+3. **Type everything** - Use Anthropic's SDK types directly
+4. **Stream first** - Design for real-time updates, not request/response
+5. **Simple over clever** - Readable code beats clever abstractions
+
+### Working with Anthropic Server Tools
+
+Server tools (like web search) work differently from regular tools:
+
+#### Key Differences
+1. **Tool Type**: Use `server_tool_use` instead of `tool_use` in content blocks
+2. **No Manual Execution**: Anthropic executes these tools automatically
+3. **Results Format**: Results come as separate content blocks (`web_search_tool_result`)
+4. **Citations**: Web search includes citations via `citations_delta` events
+
+#### Implementation Tips
+
+##### 1. Handle Multiple Content Block Types
+```typescript
+// In your streaming handler
+if (event.type === 'content_block_start') {
+  // Handle both regular and server tools
+  if (block.type === 'tool_use' || block.type === 'server_tool_use') {
+    // Track tool execution
+  } else if (block.type === 'web_search_tool_result') {
+    // Process search results
+  }
+}
+```
+
+##### 2. Track Content Block Indices
+Server tools create multiple content blocks. Use the `index` field:
+```typescript
+currentBlockIndex = event.index || contentBlocks.length
+contentBlocks[currentBlockIndex] = event.content_block
+```
+
+##### 3. Handle Citations
+Citations link text to sources via `citations_delta` events:
+```typescript
+if (event.delta.type === 'citations_delta') {
+  if (!currentTextBlock.citations) {
+    currentTextBlock.citations = []
+  }
+  currentTextBlock.citations.push(event.delta.citation)
+}
+```
+
+##### 4. Preserve All Content Blocks
+Don't filter content blocks - preserve everything for the full context:
+```typescript
+// Bad: Only keeping text blocks
+const finalContent = contentBlocks.filter(b => b.type === 'text')
+
+// Good: Keep all blocks
+const finalContent = contentBlocks.filter(b => b !== undefined)
+```
+
+#### Common Server Tools
+
+##### Web Search (`web_search_20250305`)
+- Executes searches automatically based on the query
+- Returns `web_search_tool_result` blocks with search results
+- Includes citations linking text to sources
+- Configure with `allowed_domains`, `blocked_domains`, etc.
+
+##### Code Execution (`code_execution_20250522`)
+- Runs code in a sandboxed environment
+- Returns execution results and output
+- Useful for calculations, data processing, etc.
+
+#### Debugging Server Tools
+
+1. **Log all content block types** - You might discover new types
+2. **Check the `index` field** - Ensures blocks stay in order
+3. **Watch for unknown delta types** - New features may add new deltas
+4. **Preserve raw data** - Store the complete content array for debugging
+
 ## Core Philosophy
 - **Simplicity First**: Keep everything as simple as possible
 - **One Thing at a Time**: Build incrementally, test each piece

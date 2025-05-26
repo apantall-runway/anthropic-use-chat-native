@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { 
       messages, 
-      model = 'claude-opus-4-20250514', 
+      model = 'claude-sonnet-4-20250514', 
       max_tokens = 2048,
       tools = [],
       betaFeatures = []
@@ -84,13 +84,20 @@ export async function POST(request: NextRequest) {
           } else if (chunk.type === 'content_block_start') {
             console.log('Content block started:', chunk.content_block)
           } else if (chunk.type === 'content_block_delta') {
+            console.log('Content block delta type:', chunk.delta.type)
             if (chunk.delta.type === 'text_delta') {
-              console.log('Text delta:', chunk.delta.text)
+              console.log('Text delta:', chunk.delta.text.substring(0, 100))
             } else if (chunk.delta.type === 'input_json_delta') {
               console.log('Tool input delta:', chunk.delta)
+            } else {
+              // Log any other delta types we might not be handling
+              console.log('Unknown delta type:', chunk.delta)
             }
           } else if (chunk.type === 'content_block_stop') {
             console.log('Content block stopped:', chunk)
+          } else {
+            // Log any other event types
+            console.log('Other event type:', chunk.type, chunk)
           }
         }
 

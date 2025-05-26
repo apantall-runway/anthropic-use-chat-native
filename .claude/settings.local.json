@@ -8,7 +8,8 @@
       "Bash(pnpm add:*)",
       "Bash(mkdir:*)",
       "Bash(touch:*)",
-      "WebFetch(domain:docs.anthropic.com)"
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(mv:*)"
     ],
     "deny": []
   }

@@ -10,14 +10,20 @@ export default function TestPage() {
   const threads = useChatStore((state) => state.threads)
   const selectedThreadId = useChatStore((state) => state.selectedThreadId)
   const messages = useChatStore((state) => state.messages)
-  const streamingMessage = useChatStore((state) => state.streamingMessage)
   const messageInput = useChatStore((state) => state.messageInput)
   const attachments = useChatStore((state) => state.attachments)
+  
+  // Use selectors for derived state
+  const getStreamingMessage = useChatStore((state) => state.getStreamingMessage)
+  const getActiveToolCalls = useChatStore((state) => state.getActiveToolCalls)
   const isStreaming = useChatStore((state) => state.isStreaming)
-  const activeToolCalls = useChatStore((state) => state.activeToolCalls)
-  const isThinking = useChatStore((state) => state.isThinking)
-  const currentThinkingContent = useChatStore((state) => state.currentThinkingContent)
-  const searchResults = useChatStore((state) => state.searchResults)
+  const hasThinkingBlock = useChatStore((state) => state.hasThinkingBlock)
+  
+  // Get derived values
+  const streamingMessage = getStreamingMessage()
+  const activeToolCalls = getActiveToolCalls()
+  const streaming = isStreaming()
+  const hasThinking = hasThinkingBlock()
   
   // Actions
   const setMessageInput = useChatStore((state) => state.setMessageInput)
@@ -37,11 +43,9 @@ export default function TestPage() {
     streamingMessage,
     messageInput,
     attachments,
-    isStreaming,
-    activeToolCalls: Array.from(activeToolCalls.entries()),
-    isThinking,
-    currentThinkingContent,
-    searchResults
+    isStreaming: streaming,
+    activeToolCalls,
+    hasThinking
   }
   
   return (
@@ -55,52 +59,22 @@ export default function TestPage() {
           <p className="text-green-600">✓ API Key configured server-side</p>
         </div>
         
-        {/* Thinking Display */}
-        {isThinking && currentThinkingContent && (
-          <div className="bg-blue-50 p-4 rounded-lg shadow border-2 border-blue-300">
-            <h2 className="font-semibold mb-2 text-blue-900">🤔 Thinking...</h2>
-            <p className="text-sm text-blue-800 whitespace-pre-wrap max-h-32 overflow-y-auto">
-              {currentThinkingContent}
-            </p>
-          </div>
-        )}
-        
-        {/* Search Results */}
-        {searchResults.length > 0 && (
-          <div className="bg-green-50 p-4 rounded-lg shadow">
-            <h2 className="font-semibold mb-2 text-green-900">🔍 Search Results</h2>
-            <div className="space-y-2 max-h-48 overflow-y-auto">
-              {searchResults.map((result, idx) => (
-                <div key={idx} className="bg-white p-2 rounded border border-green-200">
-                  <a href={result.url} target="_blank" rel="noopener noreferrer" 
-                     className="font-medium text-blue-600 hover:underline">
-                    {result.title}
-                  </a>
-                  <p className="text-sm text-gray-700 mt-1">{result.snippet}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        
         {/* Active Tool Calls */}
-        {activeToolCalls.size > 0 && (
-          <div className="bg-yellow-50 p-4 rounded-lg shadow">
-            <h2 className="font-semibold mb-2 text-yellow-900">⚡ Active Tools</h2>
+        {activeToolCalls.length > 0 && (
+          <div className="bg-yellow-50 p-4 rounded-lg shadow border-2 border-yellow-300">
+            <h2 className="font-semibold mb-2 text-yellow-900">🔧 Active Tools</h2>
             <div className="space-y-1">
-              {Array.from(activeToolCalls.values()).map((tool) => (
-                <div key={tool.id} className="flex items-center gap-2 text-sm">
-                  <span className={`inline-block w-2 h-2 rounded-full ${
-                    tool.status === 'running' ? 'bg-yellow-500 animate-pulse' : 
-                    tool.status === 'completed' ? 'bg-green-500' : 'bg-red-500'
-                  }`} />
+              {activeToolCalls.map((tool, idx) => (
+                <div key={idx} className="flex items-center gap-2 text-sm">
+                  <span className="inline-block w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
                   <span className="font-medium">{tool.name}</span>
-                  <span className="text-gray-600">({tool.status})</span>
+                  <span className="text-gray-600">(running)</span>
                 </div>
               ))}
             </div>
           </div>
         )}
+        
         
         {/* Message Input */}
         <div className="bg-white p-4 rounded-lg shadow">
@@ -118,14 +92,14 @@ export default function TestPage() {
               }}
               placeholder="Type a message..."
               className="flex-1 p-2 border rounded"
-              disabled={isStreaming}
+              disabled={streaming}
             />
             <button
               onClick={() => submitMessage()}
-              disabled={isStreaming || !messageInput.trim()}
+              disabled={streaming || !messageInput.trim()}
               className="px-4 py-2 bg-blue-500 text-white rounded disabled:bg-gray-300"
             >
-              {isStreaming ? 'Sending...' : 'Send'}
+              {streaming ? 'Sending...' : 'Send'}
             </button>
           </div>
         </div>
@@ -144,9 +118,27 @@ export default function TestPage() {
                     {msg.content.map((block, blockIdx) => (
                       <div key={blockIdx} className="mb-2">
                         {block.type === 'text' && (
-                          <p className="text-base leading-relaxed whitespace-pre-wrap text-gray-900">
-                            {block.text}
-                          </p>
+                          <div>
+                            <p className="text-base leading-relaxed whitespace-pre-wrap text-gray-900">
+                              {block.text}
+                            </p>
+                            {block.citations && block.citations.length > 0 && (
+                              <div className="mt-2 text-xs text-gray-600">
+                                <p className="font-semibold mb-1">Citations:</p>
+                                {block.citations.map((citation: any, citIdx: number) => (
+                                  <div key={citIdx} className="ml-2 mb-1">
+                                    <a href={citation.url} target="_blank" rel="noopener noreferrer" 
+                                       className="text-blue-600 hover:underline">
+                                      {citation.title || citation.url}
+                                    </a>
+                                    {citation.cited_text && (
+                                      <p className="text-gray-500 italic">"{citation.cited_text}"</p>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         )}
                         {block.type === 'thinking' && (
                           <details className="bg-blue-50 p-2 rounded border border-blue-200">
@@ -158,14 +150,38 @@ export default function TestPage() {
                             </p>
                           </details>
                         )}
-                        {block.type === 'tool_use' && (
+                        {(block.type === 'tool_use' || block.type === 'server_tool_use') && (
                           <div className="bg-yellow-50 p-2 rounded border border-yellow-200">
                             <p className="text-sm font-medium text-yellow-800">
-                              🔧 Tool: {block.name}
+                              🔧 Tool: {block.name} {block.type === 'server_tool_use' && '(server)'}
                             </p>
-                            <pre className="text-xs text-yellow-700 mt-1">
-                              {JSON.stringify(block.input, null, 2)}
-                            </pre>
+                            {block.input && (
+                              <pre className="text-xs text-yellow-700 mt-1">
+                                {JSON.stringify(block.input, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        )}
+                        {block.type === 'web_search_tool_result' && (
+                          <div className="bg-green-50 p-2 rounded border border-green-200">
+                            <p className="text-sm font-medium text-green-800 mb-2">
+                              🔍 Search Results
+                            </p>
+                            {block.content && block.content.map((result: any, resIdx: number) => (
+                              <div key={resIdx} className="mb-2 text-sm">
+                                {result.type === 'web_search_result' && (
+                                  <div className="pl-2 border-l-2 border-green-300">
+                                    <a href={result.url} target="_blank" rel="noopener noreferrer"
+                                       className="font-medium text-green-700 hover:underline">
+                                      {result.title}
+                                    </a>
+                                    {result.snippet && (
+                                      <p className="text-gray-600 text-xs mt-1">{result.snippet}</p>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
                           </div>
                         )}
                       </div>
@@ -175,11 +191,36 @@ export default function TestPage() {
                 {streamingMessage && (
                   <div className="p-3 rounded-lg bg-gray-100 border-2 border-blue-500">
                     <p className="font-semibold text-sm mb-1 text-gray-800">assistant (streaming)</p>
-                    <p className="text-base leading-relaxed whitespace-pre-wrap text-gray-900">
-                      {streamingMessage.content?.[0]?.type === 'text' 
-                        ? streamingMessage.content[0].text 
-                        : '...'}
-                    </p>
+                    {streamingMessage.content && streamingMessage.content.length > 0 ? (
+                      streamingMessage.content.map((block: any, blockIdx: number) => (
+                        <div key={blockIdx} className="mb-2">
+                          {block.type === 'text' && block.text && (
+                            <p className="text-base leading-relaxed whitespace-pre-wrap text-gray-900">
+                              {block.text}
+                            </p>
+                          )}
+                          {block.type === 'thinking' && block.thinking && (
+                            <details className="bg-blue-50 p-2 rounded border border-blue-200">
+                              <summary className="cursor-pointer text-sm font-medium text-blue-800">
+                                🤔 Thinking...
+                              </summary>
+                              <p className="text-sm text-blue-700 mt-2 whitespace-pre-wrap">
+                                {block.thinking}
+                              </p>
+                            </details>
+                          )}
+                          {(block.type === 'server_tool_use' || block.type === 'tool_use') && (
+                            <div className="bg-yellow-50 p-2 rounded border border-yellow-200 animate-pulse">
+                              <p className="text-sm font-medium text-yellow-800">
+                                🔧 Using {block.name}...
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-gray-500">...</p>
+                    )}
                   </div>
                 )}
               </>

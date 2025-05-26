@@ -1,27 +1,14 @@
 import { create } from 'zustand'
 import type { Message, ContentBlock } from '@anthropic-ai/sdk'
 
-// Tool types
-interface WebSearchTool {
-  type: 'web_search_20250305'
-  name: 'web_search'
-  max_uses?: number
-  allowed_domains?: string[]
-  blocked_domains?: string[]
-}
-
-interface CodeExecutionTool {
-  type: 'code_execution_20250522'
-  name: 'code_execution'
-}
-
-// Thread type (not from Anthropic SDK, but useful for organization)
+// Thread type
 interface Thread {
   id: string
   title: string
   createdAt: Date
   updatedAt: Date
   messages: Message[]
+  abortController?: AbortController
 }
 
 // Attachment type for file uploads
@@ -43,35 +30,7 @@ interface Artifact {
   createdAt: Date
 }
 
-// Document type for reference materials
-interface Document {
-  id: string
-  title: string
-  content: string
-  type: string
-  createdAt: Date
-}
-
-// Tool call status tracking
-interface ToolCallStatus {
-  id: string
-  name: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
-  startedAt: Date
-  completedAt?: Date
-  error?: string
-  result?: any
-}
-
-// Search result type
-interface SearchResult {
-  title: string
-  url: string
-  snippet: string
-  timestamp?: string
-}
-
-// Main store interface
+// Simplified store interface
 interface ChatStore {
   // UI State
   sidebarOpen: boolean
@@ -84,24 +43,14 @@ interface ChatStore {
   
   // Messages (for current thread)
   messages: Message[]
-  selectedMessageId: string | null
-  streamingMessage: Partial<Message> | null
   
   // Input State
   messageInput: string
   attachments: Attachment[]
   
-  // Artifacts/Documents
+  // Artifacts/Documents  
   artifacts: Artifact[]
   selectedArtifactId: string | null
-  documents: Document[]
-  
-  // Active Operations
-  activeToolCalls: Map<string, ToolCallStatus>
-  isThinking: boolean
-  isStreaming: boolean
-  currentThinkingContent: string
-  searchResults: SearchResult[]
   
   // UI Actions
   toggleSidebar: () => void
@@ -117,29 +66,21 @@ interface ChatStore {
   setMessageInput: (input: string) => void
   clearMessageInput: () => void
   addMessage: (message: Message) => void
-  updateStreamingMessage: (content: Partial<Message>) => void
-  finalizeStreamingMessage: (message: Message) => void
+  updateMessage: (messageId: string, updates: Partial<Message>) => void
   
   // Attachment Actions
   addAttachment: (attachment: Attachment) => void
   removeAttachment: (attachmentId: string) => void
   clearAttachments: () => void
   
-  // Tool Call Actions
-  startToolCall: (id: string, name: string) => void
-  completeToolCall: (id: string, error?: string) => void
-  updateToolCallResult: (id: string, result: any) => void
-  
-  // Thinking Actions
-  updateThinkingContent: (content: string) => void
-  clearThinking: () => void
-  
-  // Search Actions
-  addSearchResults: (results: SearchResult[]) => void
-  clearSearchResults: () => void
-  
   // Submit Message
   submitMessage: () => Promise<void>
+  
+  // Derived State Selectors
+  getStreamingMessage: () => Message | null
+  getActiveToolCalls: () => ContentBlock[]
+  isStreaming: () => boolean
+  hasThinkingBlock: () => boolean
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -152,18 +93,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   threads: [],
   selectedThreadId: null,
   messages: [],
-  selectedMessageId: null,
-  streamingMessage: null,
   messageInput: '',
   attachments: [],
   artifacts: [],
   selectedArtifactId: null,
-  documents: [],
-  activeToolCalls: new Map(),
-  isThinking: false,
-  isStreaming: false,
-  currentThinkingContent: '',
-  searchResults: [],
   
   // UI Actions
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
@@ -197,6 +130,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
   
   deleteThread: (threadId) => {
+    // Cancel any active request for this thread
+    const thread = get().threads.find(t => t.id === threadId)
+    thread?.abortController?.abort()
+    
     set((state) => ({
       threads: state.threads.filter(t => t.id !== threadId),
       selectedThreadId: state.selectedThreadId === threadId ? null : state.selectedThreadId,
@@ -212,11 +149,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((state) => {
       const newMessages = [...state.messages, message]
       
-      // Update thread with new message
+      // Update thread's messages
       const updatedThreads = state.threads.map(thread => {
         if (thread.id === state.selectedThreadId) {
-          return {
-            ...thread,
+          return { 
+            ...thread, 
             messages: newMessages,
             updatedAt: new Date()
           }
@@ -231,89 +168,71 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
   },
   
-  updateStreamingMessage: (content) => {
-    set((state) => ({
-      streamingMessage: {
-        ...state.streamingMessage,
-        ...content
+  updateMessage: (messageId, updates) => {
+    set((state) => {
+      const newMessages = state.messages.map(msg => 
+        msg.id === messageId ? { ...msg, ...updates } : msg
+      )
+      
+      // Update thread's messages
+      const updatedThreads = state.threads.map(thread => {
+        if (thread.id === state.selectedThreadId) {
+          return { 
+            ...thread, 
+            messages: newMessages,
+            updatedAt: new Date()
+          }
+        }
+        return thread
+      })
+      
+      return {
+        messages: newMessages,
+        threads: updatedThreads
       }
-    }))
-  },
-  
-  finalizeStreamingMessage: (message) => {
-    get().addMessage(message)
-    set({ streamingMessage: null, isStreaming: false })
+    })
   },
   
   // Attachment Actions
-  addAttachment: (attachment) => {
-    set((state) => ({
-      attachments: [...state.attachments, attachment]
-    }))
-  },
-  
-  removeAttachment: (attachmentId) => {
-    set((state) => ({
-      attachments: state.attachments.filter(a => a.id !== attachmentId)
-    }))
-  },
-  
+  addAttachment: (attachment) => set((state) => ({ 
+    attachments: [...state.attachments, attachment] 
+  })),
+  removeAttachment: (attachmentId) => set((state) => ({
+    attachments: state.attachments.filter(a => a.id !== attachmentId)
+  })),
   clearAttachments: () => set({ attachments: [] }),
   
-  // Tool Call Actions
-  startToolCall: (id, name) => {
-    const toolCall: ToolCallStatus = {
-      id,
-      name,
-      status: 'running',
-      startedAt: new Date()
-    }
-    set((state) => {
-      const newMap = new Map(state.activeToolCalls)
-      newMap.set(id, toolCall)
-      return { activeToolCalls: newMap }
-    })
+  // Derived State Selectors
+  getStreamingMessage: () => {
+    const messages = get().messages
+    const lastMessage = messages[messages.length - 1]
+    // A message is streaming if it's from assistant and has no stop_reason
+    return lastMessage?.role === 'assistant' && !lastMessage.stop_reason 
+      ? lastMessage 
+      : null
   },
   
-  completeToolCall: (id, error) => {
-    set((state) => {
-      const newMap = new Map(state.activeToolCalls)
-      const toolCall = newMap.get(id)
-      if (toolCall) {
-        newMap.set(id, {
-          ...toolCall,
-          status: error ? 'failed' : 'completed',
-          completedAt: new Date(),
-          error
-        })
-      }
-      return { activeToolCalls: newMap }
-    })
+  getActiveToolCalls: () => {
+    const streamingMsg = get().getStreamingMessage()
+    if (!streamingMsg) return []
+    
+    return streamingMsg.content.filter(block => 
+      (block.type === 'tool_use' || block.type === 'server_tool_use')
+    )
   },
   
-  updateToolCallResult: (id, result) => {
-    set((state) => {
-      const newMap = new Map(state.activeToolCalls)
-      const toolCall = newMap.get(id)
-      if (toolCall) {
-        newMap.set(id, {
-          ...toolCall,
-          result
-        })
-      }
-      return { activeToolCalls: newMap }
-    })
+  isStreaming: () => {
+    return get().getStreamingMessage() !== null
   },
   
-  // Thinking Actions
-  updateThinkingContent: (content) => set({ currentThinkingContent: content, isThinking: true }),
-  clearThinking: () => set({ currentThinkingContent: '', isThinking: false }),
-  
-  // Search Actions
-  addSearchResults: (results) => set((state) => ({ 
-    searchResults: [...state.searchResults, ...results] 
-  })),
-  clearSearchResults: () => set({ searchResults: [] }),
+  hasThinkingBlock: () => {
+    const streamingMsg = get().getStreamingMessage()
+    if (!streamingMsg) return false
+    
+    return streamingMsg.content.some(block => 
+      block.type === 'thinking' && block.thinking !== undefined
+    )
+  },
   
   // Submit Message
   submitMessage: async () => {
@@ -326,6 +245,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (!threadId) {
       threadId = get().createThread()
     }
+    
+    // Cancel any existing request for this thread
+    const thread = get().threads.find(t => t.id === threadId)
+    thread?.abortController?.abort()
+    
+    // Create new abort controller
+    const abortController = new AbortController()
+    set((state) => ({
+      threads: state.threads.map(t => 
+        t.id === threadId ? { ...t, abortController } : t
+      )
+    }))
     
     // Create user message
     const userMessage: Message = {
@@ -341,7 +272,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     
     // Add user message and clear input
     get().addMessage(userMessage)
-    set({ messageInput: '', isStreaming: true, streamingMessage: {} })
+    set({ messageInput: '' })
+    
+    // Create assistant message that we'll update as we stream
+    const assistantMessage: Message = {
+      id: `msg_asst_${Date.now()}`,
+      type: 'message', 
+      role: 'assistant',
+      content: [],
+      model: 'claude-opus-4-20250514',
+      stop_reason: null,
+      stop_sequence: null,
+      usage: { input_tokens: 0, output_tokens: 0 }
+    }
+    get().addMessage(assistantMessage)
     
     try {
       // Prepare messages for API (only content)
@@ -349,6 +293,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         role: msg.role,
         content: msg.content
       }))
+      
+      console.log('Sending request to API...')
       
       // Call API
       const response = await fetch('/api/chat', {
@@ -369,8 +315,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               name: 'code_execution'
             }
           ]
-        })
+        }),
+        signal: abortController.signal
       })
+      
+      console.log('Response received:', response.ok, response.status)
       
       if (!response.ok) {
         throw new Error(`API error: ${response.statusText}`)
@@ -378,106 +327,143 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       
       // Import parser dynamically to avoid circular dependencies
       const { parseSSEStream } = await import('@/lib/stream-parser')
+      console.log('Parser imported, starting stream processing...')
       
       // Process stream
-      let streamingContent = ''
-      let messageId = ''
-      let thinkingContent = ''
       const contentBlocks: ContentBlock[] = []
-      let currentThinkingBlock: any = null
-      
-      // Clear previous search results and thinking
-      get().clearSearchResults()
-      get().clearThinking()
       
       for await (const event of parseSSEStream(response)) {
+        console.log('Stream event:', event.type, event)
+        
         if (event.type === 'message_start') {
-          messageId = event.message.id
-          set({ streamingMessage: event.message })
-        } else if (event.type === 'content_block_start') {
-          if (event.content_block.type === 'tool_use') {
-            // Track tool use start
-            get().startToolCall(event.content_block.id, event.content_block.name)
-            contentBlocks.push(event.content_block)
-          } else if (event.content_block.type === 'thinking') {
-            set({ isThinking: true })
-            currentThinkingBlock = { ...event.content_block, thinking: '' }
-          } else if (event.content_block.type === 'text') {
-            contentBlocks.push(event.content_block)
-          }
-        } else if (event.type === 'content_block_stop') {
-          if (event.content_block?.type === 'tool_use') {
-            // Mark tool as complete
-            get().completeToolCall(event.content_block.id)
-          } else if (event.content_block?.type === 'thinking') {
-            set({ isThinking: false })
-            // Save the complete thinking block
-            if (currentThinkingBlock) {
-              currentThinkingBlock.thinking = thinkingContent
-              contentBlocks.push(currentThinkingBlock)
-            }
-          }
-        } else if (event.type === 'content_block_delta') {
-          if (event.delta.type === 'text_delta') {
-            streamingContent += event.delta.text
+          // Update message ID if provided
+          if (event.message.id) {
+            const oldId = assistantMessage.id
+            const newId = event.message.id
+            console.log('Updating message ID from', oldId, 'to', newId)
+            
+            // Update the message with the new ID
             set((state) => ({
-              streamingMessage: {
-                ...state.streamingMessage,
-                content: [{ type: 'text', text: streamingContent }]
-              }
+              messages: state.messages.map(msg => 
+                msg.id === oldId ? { ...msg, id: newId } : msg
+              ),
+              threads: state.threads.map(thread => 
+                thread.id === state.selectedThreadId 
+                  ? { 
+                      ...thread, 
+                      messages: thread.messages.map(msg => 
+                        msg.id === oldId ? { ...msg, id: newId } : msg
+                      )
+                    }
+                  : thread
+              )
             }))
-          } else if (event.delta.type === 'thinking_delta') {
-            // Handle thinking content
-            thinkingContent += event.delta.thinking
-            get().updateThinkingContent(thinkingContent)
-          } else if (event.delta.type === 'tool_result_delta') {
-            // Handle tool results (e.g., search results)
-            if (event.delta.tool_name === 'web_search' && event.delta.result) {
-              // Parse and add search results
-              try {
-                const results = JSON.parse(event.delta.result)
-                if (Array.isArray(results)) {
-                  get().addSearchResults(results)
-                }
-              } catch (e) {
-                console.error('Failed to parse search results:', e)
-              }
+            
+            // Update our local reference
+            assistantMessage.id = newId
+          }
+        } else if (event.type === 'content_block_start') {
+          const blockIndex = event.index || contentBlocks.length
+          console.log('Content block start:', event.content_block.type, 'at index', blockIndex)
+          
+          // Initialize the block in the array
+          if (event.content_block.type === 'tool_use' || event.content_block.type === 'server_tool_use') {
+            contentBlocks[blockIndex] = event.content_block
+          } else if (event.content_block.type === 'web_search_tool_result') {
+            console.log('Web search results received:', event.content_block)
+            contentBlocks[blockIndex] = event.content_block
+          } else if (event.content_block.type === 'thinking') {
+            contentBlocks[blockIndex] = { ...event.content_block, thinking: '' }
+          } else if (event.content_block.type === 'text') {
+            contentBlocks[blockIndex] = { ...event.content_block, text: '', citations: event.content_block.citations || [] }
+          }
+          
+          // Update message with current blocks
+          get().updateMessage(assistantMessage.id, { 
+            content: contentBlocks.filter(b => b !== undefined) 
+          })
+        } else if (event.type === 'content_block_delta') {
+          const deltaIndex = event.index || 0
+          
+          if (event.delta.type === 'text_delta') {
+            // Get the block at deltaIndex
+            const block = contentBlocks[deltaIndex]
+            if (block && block.type === 'text') {
+              block.text += event.delta.text
+              contentBlocks[deltaIndex] = block
+              console.log(`Text accumulated at index ${deltaIndex}:`, block.text)
+            } else {
+              console.log(`No text block at index ${deltaIndex}, blocks:`, contentBlocks)
             }
+          } else if (event.delta.type === 'citations_delta') {
+            console.log('Citation delta:', event.delta.citation)
+            const block = contentBlocks[deltaIndex]
+            if (block && block.type === 'text' && event.delta.citation) {
+              if (!block.citations) {
+                block.citations = []
+              }
+              block.citations.push(event.delta.citation)
+              contentBlocks[deltaIndex] = block
+            }
+          } else if (event.delta.type === 'thinking_delta') {
+            // Get the block at deltaIndex
+            const block = contentBlocks[deltaIndex]
+            if (block && block.type === 'thinking') {
+              block.thinking += event.delta.thinking
+              contentBlocks[deltaIndex] = block
+            }
+          } else if (event.delta.type === 'input_json_delta') {
+            console.log('Tool input delta:', event.delta)
+          } else {
+            console.log('Unknown delta type:', event.delta)
+          }
+          
+          // Update message with current blocks
+          get().updateMessage(assistantMessage.id, { 
+            content: contentBlocks.filter(b => b !== undefined) 
+          })
+        } else if (event.type === 'message_delta') {
+          // Handle message delta for stop_reason and usage
+          if (event.delta?.stop_reason) {
+            console.log('Setting stop_reason:', event.delta.stop_reason)
+            get().updateMessage(assistantMessage.id, {
+              stop_reason: event.delta.stop_reason,
+              usage: event.usage || { input_tokens: 0, output_tokens: 0 }
+            })
           }
         } else if (event.type === 'message_stop') {
-          // Build final content array
-          const finalContent: ContentBlock[] = []
+          // Clean up and finalize
+          const cleanedContentBlocks = contentBlocks.filter(block => block !== undefined)
           
-          // Add thinking blocks and tool use blocks in order
-          contentBlocks.forEach(block => {
-            if (block.type === 'thinking' || block.type === 'tool_use') {
-              finalContent.push(block)
-            }
-          })
+          console.log('Final content blocks:', JSON.stringify(cleanedContentBlocks, null, 2))
           
-          // Add the main text content
-          if (streamingContent) {
-            finalContent.push({ type: 'text', text: streamingContent })
-          }
-          
-          // Finalize the message
-          const finalMessage: Message = {
-            id: messageId,
-            type: 'message',
-            role: 'assistant',
-            content: finalContent,
-            model: 'claude-opus-4-20250514',
-            stop_reason: 'end_turn',
-            stop_sequence: null,
-            usage: event.message?.usage || { input_tokens: 0, output_tokens: 0 }
-          }
-          get().finalizeStreamingMessage(finalMessage)
+          // The content is already updated, and stop_reason/usage come from message_delta
+          // Just log that we're done
+          console.log('Message completed')
         }
       }
-    } catch (error) {
-      console.error('Chat error:', error)
-      set({ isStreaming: false, streamingMessage: null })
-      // TODO: Add error handling/display
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.log('Request aborted')
+        // Remove the incomplete assistant message
+        set((state) => ({
+          messages: state.messages.filter(m => m.id !== assistantMessage.id)
+        }))
+      } else {
+        console.error('Chat error:', error)
+        // Update the assistant message with error
+        get().updateMessage(assistantMessage.id, {
+          content: [{ type: 'text', text: `Error: ${error.message}` }],
+          stop_reason: 'error'
+        })
+      }
+    } finally {
+      // Clean up abort controller
+      set((state) => ({
+        threads: state.threads.map(t => 
+          t.id === threadId ? { ...t, abortController: undefined } : t
+        )
+      }))
     }
   }
 }))
